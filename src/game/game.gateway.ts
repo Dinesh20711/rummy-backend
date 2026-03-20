@@ -66,6 +66,7 @@ export class GameGateway {
     const existing = this.room.players.find((p) => p.name === data.name);
 
     if (existing) {
+      if (existing.id === this.room.hostId) this.room.hostId = client.id;
       existing.id = client.id;
       client.join(this.ROOM);
       client.emit('gameState', this.getState());
@@ -105,7 +106,10 @@ export class GameGateway {
     });
 
     this.room.openPile = [this.room.deck.pop()!];
-    this.room.currentTurnIndex = 0;
+    this.room.currentTurnIndex = this.room.players.findIndex(
+      (p) => p.id === this.room.hostId,
+    );
+    if (this.room.currentTurnIndex === -1) this.room.currentTurnIndex = 0;
     this.room.gameStarted = true;
 
     this.room.suspenseJoker =
@@ -138,6 +142,11 @@ export class GameGateway {
 
     player.hand.push(card);
     player.hasDrawn = true;
+
+    client.broadcast.to(this.ROOM).emit('cardDrawn', {
+      from: data.from,
+      card: data.from === 'open' ? card : null,
+    });
 
     this.broadcast();
   }
@@ -239,12 +248,33 @@ export class GameGateway {
 
     this.server.to(this.ROOM).emit('gameCompleted', {
       winnerId: client.id,
-      winnerName: winnerPlayer.name, // ✅ added
+      winnerName: winnerPlayer.name,
       joker: this.room.suspenseJoker,
       screenshot: data?.screenshot || null,
     });
 
+    // Rotate host to next player so the same person isn't always host
+    const currentHostIndex = this.room.players.findIndex(
+      (p) => p.id === this.room.hostId,
+    );
+    const nextHostIndex = (currentHostIndex + 1) % this.room.players.length;
+    this.room.hostId = this.room.players[nextHostIndex].id;
+
+    // Reset game state while keeping players in the room
     this.room.gameStarted = false;
+    this.room.deck = [];
+    this.room.openPile = [];
+    this.room.pendingRummy = null;
+    this.room.suspenseJoker = null;
+    this.room.jokerUnlockedBy = null;
+    this.room.currentTurnIndex = 0;
+    this.room.players.forEach((p) => {
+      p.hand = [];
+      p.hasDrawn = false;
+    });
+
+    // Broadcast updated lobby state so clients see the new host and can start again
+    this.broadcast();
   }
   /* ================= RESET ================= */
 
